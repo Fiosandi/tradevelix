@@ -1,0 +1,41 @@
+# Secrets — NEVER commit
+.env
+*.env
+!.env.example
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+frontend/dist/
+*.log
+vite.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+
+# Local DB / temp
+*.sqlite
+*.db
+/tmp/
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tradevelix</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800&display=swap" rel="stylesheet">
+    <style>
+      :root { --bg: #0a0f1e; }
+      html, body { margin: 0; background: var(--bg); }
+      #root { min-height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Only catch errors from our own code — ignore browser extensions
+      window.onerror = function(msg, url) {
+        if (url && (url.startsWith('chrome-extension://') || url.startsWith('moz-extension://'))) {
+          return true; // suppress extension errors silently
+        }
+        console.error('[Tradevelix]', msg, url);
+        return false;
+      };
+    </script>
+  </body>
+</html>

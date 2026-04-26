@@ -1,0 +1,91 @@
+version: "3.8"
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-remora}
+      POSTGRES_USER: ${POSTGRES_USER:-remora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-remora_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-remora}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-remora}:${POSTGRES_PASSWORD:-remora_password}@postgres:5432/${POSTGRES_DB:-remora}
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY}
+      RAPIDAPI_HOST: ${RAPIDAPI_HOST:-indonesia-stock-exchange-idx.p.rapidapi.com}
+      API_PLAN: ${API_PLAN:-FREE}
+      API_RATE_LIMIT_SECONDS: ${API_RATE_LIMIT_SECONDS:-2}
+      API_MONTHLY_CALL_LIMIT: ${API_MONTHLY_CALL_LIMIT:-900}
+      API_DAILY_CALL_LIMIT: ${API_DAILY_CALL_LIMIT:-100}
+      WATCHLIST: ${WATCHLIST:-BUVA,BIPI,VKTR,BUMI,BRMS,ENRG,SUPA,COCO,PTRO,CUAN,IMPC,INDY}
+      WHALE_BROKERS: ${WHALE_BROKERS:-AI,BK,YU,BB,AS,SS,CS}
+      RETAIL_BROKERS: ${RETAIL_BROKERS:-YP,XL,PD,XC,CP,AB}
+      SYNC_DAILY_HOUR: ${SYNC_DAILY_HOUR:-18}
+      SYNC_DAILY_MINUTE: ${SYNC_DAILY_MINUTE:-0}
+      SYNC_WEEKLY_DAY: ${SYNC_WEEKLY_DAY:-saturday}
+      SYNC_WEEKLY_HOUR: ${SYNC_WEEKLY_HOUR:-10}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m app.scheduler
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-remora}:${POSTGRES_PASSWORD:-remora_password}@postgres:5432/${POSTGRES_DB:-remora}
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY}
+      RAPIDAPI_HOST: ${RAPIDAPI_HOST:-indonesia-stock-exchange-idx.p.rapidapi.com}
+      API_PLAN: ${API_PLAN:-FREE}
+      API_RATE_LIMIT_SECONDS: ${API_RATE_LIMIT_SECONDS:-2}
+      API_MONTHLY_CALL_LIMIT: ${API_MONTHLY_CALL_LIMIT:-900}
+      API_DAILY_CALL_LIMIT: ${API_DAILY_CALL_LIMIT:-100}
+      WATCHLIST: ${WATCHLIST:-BUVA,BIPI,VKTR,BUMI,BRMS,ENRG,SUPA,COCO,PTRO,CUAN,IMPC,INDY}
+      WHALE_BROKERS: ${WHALE_BROKERS:-AI,BK,YU,BB,AS,SS,CS}
+      RETAIL_BROKERS: ${RETAIL_BROKERS:-YP,XL,PD,XC,CP,AB}
+      SYNC_DAILY_HOUR: ${SYNC_DAILY_HOUR:-18}
+      SYNC_DAILY_MINUTE: ${SYNC_DAILY_MINUTE:-0}
+      SYNC_WEEKLY_DAY: ${SYNC_WEEKLY_DAY:-saturday}
+      SYNC_WEEKLY_HOUR: ${SYNC_WEEKLY_HOUR:-10}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api/v1
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
