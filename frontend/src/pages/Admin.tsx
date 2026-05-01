@@ -448,8 +448,10 @@ interface SyncEvent {
   unknown?: number;
 }
 
-const fmtTs = (iso: string) => {
+const fmtTs = (iso?: string) => {
+  if (!iso) return new Date().toLocaleTimeString('en-GB', { hour12: false });
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return new Date().toLocaleTimeString('en-GB', { hour12: false });
   return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
 };
 

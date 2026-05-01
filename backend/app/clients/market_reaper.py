@@ -177,6 +177,10 @@ class MarketReaperClient:
         """Total calls across all keys this month."""
         return sum(self._key_calls.values())
 
+    def _effective_limit(self, key_idx: int) -> int:
+        """Use upstream X-RateLimit-Requests-Limit header when known, else config default."""
+        return self._key_limit_header.get(key_idx) or self.monthly_limit
+
     def _pick_least_used_key(self) -> int:
         """Return the index of the least-used non-flagged key with quota left.
 
@@ -196,7 +200,9 @@ class MarketReaperClient:
                     self._key_bad.pop(i, None)
             if i in self._key_bad:
                 continue
-            if self._key_calls[i] >= self.monthly_limit:
+            # Trust upstream's reported limit per key — it can differ from our
+            # static config (e.g. plan upgraded from 900 to 1000).
+            if self._key_calls[i] >= self._effective_limit(i):
                 self._key_bad[i] = "429_quota"
                 continue
             entry = (self._key_calls[i], i)
@@ -300,25 +306,14 @@ class MarketReaperClient:
                                    used=self._key_calls.get(self._key_idx),
                                    size=self._summarize_response(data), retried=True)
                 elif e.response.status_code == 403:
-                    self._key_bad[self._key_idx] = "403_unsubscribed"
-                    event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=403, key_index=self._key_idx + 1, message="forbidden; flagged 403_unsubscribed")
-                    logger.warning("403 on key #%d — flagged 403_unsubscribed, rotating and retrying...", self._key_idx + 1)
-                    try:
-                        self._rotate_key()
-                    except RateLimitExceeded:
-                        event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=403, message="all keys exhausted")
-                        logger.error("All keys exhausted on 403.")
-                        raise
-                    event_bus.emit("key_event", key_index=self._key_idx + 1, action="rotated", reason="after 403")
-                    response = await client.get(url, headers=self.headers, params=params or {})
-                    self._capture_rate_limit_headers(response)
-                    response.raise_for_status()
-                    data = response.json()
-                    event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
-                                   key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
-                                   limit=self._key_limit_header.get(self._key_idx) or self.monthly_limit,
-                                   used=self._key_calls.get(self._key_idx),
-                                   size=self._summarize_response(data), retried=True)
+                    # 403 from this API is per-endpoint (not in your plan), not per-key.
+                    # Don't flag the key — just surface the error to the caller.
+                    event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=403,
+                                   key_index=self._key_idx + 1,
+                                   message="403 forbidden — endpoint likely not in your RapidAPI plan")
+                    logger.warning("403 on key #%d for %s — endpoint not subscribed; not flagging key.",
+                                   self._key_idx + 1, endpoint)
+                    raise
                 else:
                     event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=e.response.status_code,
                                    key_index=self._key_idx + 1, message=str(e)[:200])

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     RAPIDAPI_HOST: str = "indonesia-stock-exchange-idx.p.rapidapi.com"
     API_PLAN: str = "FREE"
     API_RATE_LIMIT_SECONDS: float = 2.0
-    API_MONTHLY_CALL_LIMIT: int = 900  # Per key
+    API_MONTHLY_CALL_LIMIT: int = 1000  # Fallback per-key limit; overridden per-key by upstream X-RateLimit-Requests-Limit header
     API_DAILY_CALL_LIMIT: int = 150
 
     @property

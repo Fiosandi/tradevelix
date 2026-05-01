@@ -357,7 +357,8 @@ async def stream_sync_events():
     """
     async def gen():
         # tell client the stream is live
-        yield f"data: {json.dumps({'type': 'hello', 'subscribers': event_bus.subscriber_count() + 1})}\n\n"
+        from datetime import datetime
+        yield f"data: {json.dumps({'type': 'hello', 'ts': datetime.utcnow().isoformat() + 'Z', 'subscribers': event_bus.subscriber_count() + 1})}\n\n"
         try:
             async for evt in event_bus.subscribe():
                 yield f"data: {json.dumps(evt, default=str)}\n\n"
