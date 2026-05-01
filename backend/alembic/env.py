@@ -2,7 +2,17 @@
 
 import asyncio
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+# Make `app` importable when alembic is invoked without PYTHONPATH set.
+# Using PYTHONPATH=<backend_root> would make this dir (alembic/) shadow the
+# installed alembic package, so we add the backend root explicitly here.
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config

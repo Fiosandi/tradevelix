@@ -259,10 +259,13 @@ def main():
         warn(f"pip exited {rc}: {e}")
 
     banner("Step 6 - alembic upgrade head")
+    # Note: do NOT set PYTHONPATH=<backend_root> here — it would make the
+    # local alembic/ migrations dir shadow the installed alembic package.
+    # env.py prepends the backend root to sys.path itself.
     rc, o, e = ssh_exec(
         client,
         f"cd {REMOTE_BACKEND} && . {venv_path}/bin/activate && "
-        f"PYTHONPATH={REMOTE_BACKEND} alembic upgrade head 2>&1",
+        f"alembic upgrade head 2>&1",
         timeout=120,
     )
     for line in (o + "\n" + e).splitlines()[-12:]:
@@ -308,7 +311,7 @@ def main():
         for line in (o or e).splitlines():
             print(f"    {line}")
 
-    rc, o, _ = ssh_exec(client, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/health 2>/dev/null || echo unreachable", timeout=10)
+    rc, o, _ = ssh_exec(client, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/admin/sync/status 2>/dev/null || echo unreachable", timeout=10)
     step(f"backend health check: HTTP {o}")
 
     client.close()
