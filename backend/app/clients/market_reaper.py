@@ -21,6 +21,7 @@ import httpx
 from app.config import settings
 from app.database import async_session
 from app.models.system import SyncLog, ApiRawResponse
+from app.services import event_bus
 from sqlalchemy import select, func
 
 logger = logging.getLogger(__name__)
@@ -232,6 +233,8 @@ class MarketReaperClient:
 
         url = f"{self.BASE_URL}{endpoint}"
         logger.info("→ %s  params=%s", endpoint, params)
+        ticker = self._extract_ticker(endpoint, params)
+        event_bus.emit("api_request", endpoint=endpoint, params=params or {}, ticker=ticker, key_index=self._key_idx + 1)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -239,44 +242,87 @@ class MarketReaperClient:
                 self._capture_rate_limit_headers(response)
                 response.raise_for_status()
                 data = response.json()
+                event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
+                               key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                               size=self._summarize_response(data))
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     import asyncio
                     self._capture_rate_limit_headers(e.response)
                     self._key_bad[self._key_idx] = "429_quota"
+                    event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=429, key_index=self._key_idx + 1, message="rate-limited; flagged 429_quota")
                     logger.warning("429 on key #%d — flagged 429_quota, rotating and retrying in 5s...", self._key_idx + 1)
                     try:
                         self._rotate_key()
                     except RateLimitExceeded:
+                        event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=429, message="all keys exhausted")
                         logger.error("All keys exhausted on 429.")
                         raise
+                    event_bus.emit("key_event", key_index=self._key_idx + 1, action="rotated", reason="after 429")
                     await asyncio.sleep(5)
                     response = await client.get(url, headers=self.headers, params=params or {})
                     self._capture_rate_limit_headers(response)
                     response.raise_for_status()
                     data = response.json()
+                    event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
+                                   key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                                   size=self._summarize_response(data), retried=True)
                 elif e.response.status_code == 403:
                     self._key_bad[self._key_idx] = "403_unsubscribed"
+                    event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=403, key_index=self._key_idx + 1, message="forbidden; flagged 403_unsubscribed")
                     logger.warning("403 on key #%d — flagged 403_unsubscribed, rotating and retrying...", self._key_idx + 1)
                     try:
                         self._rotate_key()
                     except RateLimitExceeded:
+                        event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=403, message="all keys exhausted")
                         logger.error("All keys exhausted on 403.")
                         raise
+                    event_bus.emit("key_event", key_index=self._key_idx + 1, action="rotated", reason="after 403")
                     response = await client.get(url, headers=self.headers, params=params or {})
                     self._capture_rate_limit_headers(response)
                     response.raise_for_status()
                     data = response.json()
+                    event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
+                                   key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                                   size=self._summarize_response(data), retried=True)
                 else:
+                    event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=e.response.status_code,
+                                   key_index=self._key_idx + 1, message=str(e)[:200])
                     logger.error("HTTP %s: %s", e.response.status_code, endpoint)
                     raise
             except httpx.RequestError as e:
+                event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=0, key_index=self._key_idx + 1, message=f"request error: {e}"[:200])
                 logger.error("Request error: %s", e)
                 raise
 
         self._save_state()
         await self._store_raw_response(endpoint, params, data)
         return data
+
+    @staticmethod
+    def _extract_ticker(endpoint: str, params: Optional[dict]) -> Optional[str]:
+        if params and "symbol" in params:
+            return params["symbol"]
+        for part in endpoint.split("/"):
+            if 3 <= len(part) <= 6 and part.isupper():
+                return part
+        return None
+
+    @staticmethod
+    def _summarize_response(data: Any) -> str:
+        """Compact one-line summary of a response payload for the live terminal."""
+        try:
+            if isinstance(data, dict):
+                inner = data.get("data") if isinstance(data.get("data"), (list, dict)) else data
+                if isinstance(inner, list):
+                    return f"{len(inner)} items"
+                if isinstance(inner, dict):
+                    return f"{len(inner)} fields"
+            if isinstance(data, list):
+                return f"{len(data)} items"
+        except Exception:
+            pass
+        return "ok"
 
     async def _store_raw_response(self, endpoint: str, params: Optional[dict], data: dict):
         """Store the raw API response in the database for later analysis."""

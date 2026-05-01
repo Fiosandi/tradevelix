@@ -1361,6 +1361,8 @@ async def run_sync_background(sync_type: str):
 
     This is the entry point for background tasks triggered from API endpoints.
     """
+    from app.services import event_bus
+    event_bus.emit("sync_start", sync_type=sync_type)
     async with async_session() as db:
         service = SyncService(db)
         try:
@@ -1395,5 +1397,9 @@ async def run_sync_background(sync_type: str):
                 await service.sync_price_history(days=days)
             else:
                 logger.error(f"Unknown sync type: {sync_type}")
+                event_bus.emit("sync_complete", sync_type=sync_type, status="FAILED", message=f"unknown sync type: {sync_type}")
+                return
+            event_bus.emit("sync_complete", sync_type=sync_type, status="SUCCESS")
         except Exception as e:
             logger.error(f"Background sync failed ({sync_type}): {e}", exc_info=True)
+            event_bus.emit("sync_complete", sync_type=sync_type, status="FAILED", message=str(e)[:200])

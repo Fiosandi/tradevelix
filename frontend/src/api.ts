@@ -106,6 +106,11 @@ export const adminApi = {
 
   getKseiJobs: () =>
     http.get('/admin/ownership/jobs').then(r => r.data),
+
+  /** Open an SSE connection for live sync events. Returns the EventSource so
+   *  the caller can `.close()` it. The caller attaches `.onmessage` etc. */
+  openSyncStream: (): EventSource =>
+    new EventSource(`${API_BASE}/admin/sync/stream`),
 };
 
 export const ownershipApi = {

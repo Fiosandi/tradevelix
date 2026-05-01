@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { adminApi, dashboardApi } from '../api';
 import { Layout } from '../components/Layout';
-import { RefreshCw, Play, Database, Activity, Key, Clock, Users, Settings, Shield } from 'lucide-react';
+import { RefreshCw, Play, Database, Activity, Key, Clock, Users, Settings, Shield, Terminal, X, Trash2 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -402,6 +402,150 @@ const SystemTab: React.FC<{
   );
 };
 
+// ─── Live Terminal (SSE) ─────────────────────────────────────────────────────
+
+interface SyncEvent {
+  ts: string;
+  type: 'hello' | 'sync_start' | 'sync_complete' | 'api_request' | 'api_response' | 'api_error' | 'key_event';
+  sync_type?: string;
+  endpoint?: string;
+  params?: Record<string, any>;
+  ticker?: string | null;
+  key_index?: number;
+  status?: number | string;
+  remaining?: number | null;
+  size?: string;
+  retried?: boolean;
+  action?: string;
+  reason?: string;
+  message?: string;
+  subscribers?: number;
+}
+
+const fmtTs = (iso: string) => {
+  const d = new Date(iso);
+  return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+};
+
+const renderEventLine = (e: SyncEvent): { color: string; text: React.ReactNode } => {
+  const t = fmtTs(e.ts);
+  const tickerTag = e.ticker ? ` ${e.ticker}` : '';
+  const keyTag = e.key_index ? ` key#${e.key_index}` : '';
+  switch (e.type) {
+    case 'hello':
+      return { color: '#9ca3af', text: <>{t}  · stream connected ({e.subscribers} subscriber{e.subscribers === 1 ? '' : 's'})</> };
+    case 'sync_start':
+      return { color: '#22d3ee', text: <><b>{t}  ▶ START</b>  {e.sync_type}</> };
+    case 'sync_complete':
+      if (e.status === 'SUCCESS')
+        return { color: '#34d399', text: <><b>{t}  ✓ DONE</b>  {e.sync_type}</> };
+      return { color: '#f87171', text: <><b>{t}  ✗ FAIL</b>  {e.sync_type} — {e.message}</> };
+    case 'api_request': {
+      const params = e.params && Object.keys(e.params).length
+        ? '  ' + Object.entries(e.params).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(' ')
+        : '';
+      return { color: '#9ca3af', text: <>{t}  →  {e.endpoint}{tickerTag}{params}{keyTag}</> };
+    }
+    case 'api_response': {
+      const left = e.remaining != null ? `, ${e.remaining} left` : '';
+      const retry = e.retried ? ' (retry)' : '';
+      return { color: '#86efac', text: <>{t}  ←  {e.status}  {e.size}{tickerTag}{keyTag}{left}{retry}</> };
+    }
+    case 'api_error':
+      return { color: '#fca5a5', text: <>{t}  ✗  {e.status}  {e.endpoint}{tickerTag}{keyTag}  — {e.message}</> };
+    case 'key_event':
+      return { color: '#fbbf24', text: <>{t}  🔑  key#{e.key_index} {e.action} ({e.reason})</> };
+    default:
+      return { color: '#9ca3af', text: <>{t}  {JSON.stringify(e)}</> };
+  }
+};
+
+const LiveTerminal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const [events, setEvents] = useState<SyncEvent[]>([]);
+  const [connected, setConnected] = useState(false);
+  const [autoscroll, setAutoscroll] = useState(true);
+  const esRef = useRef<EventSource | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const es = adminApi.openSyncStream();
+    esRef.current = es;
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+    es.onmessage = ev => {
+      try {
+        const data: SyncEvent = JSON.parse(ev.data);
+        setEvents(prev => {
+          const next = [...prev, data];
+          return next.length > 1000 ? next.slice(-1000) : next;
+        });
+      } catch { /* ignore malformed */ }
+    };
+    return () => { es.close(); esRef.current = null; setConnected(false); };
+  }, [open]);
+
+  useEffect(() => {
+    if (autoscroll && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [events, autoscroll]);
+
+  if (!open) return null;
+
+  return (
+    <div style={{
+      position: 'fixed', bottom: 16, right: 16, width: 'min(720px, 95vw)', height: 360,
+      background: '#0a0e14', border: '1px solid #1f2937', borderRadius: 10,
+      boxShadow: '0 10px 40px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
+      zIndex: 1000, overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '8px 12px', background: '#111827', borderBottom: '1px solid #1f2937',
+      }}>
+        <Terminal size={13} style={{ color: '#34d399' }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#e5e7eb', fontFamily: 'monospace' }}>
+          live-sync
+        </span>
+        <span style={{
+          fontSize: 9, padding: '2px 6px', borderRadius: 3, fontWeight: 700,
+          background: connected ? '#064e3b' : '#7f1d1d', color: connected ? '#34d399' : '#fca5a5',
+        }}>{connected ? '● CONNECTED' : '○ OFFLINE'}</span>
+        <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'monospace', marginLeft: 'auto' }}>
+          {events.length} events
+        </span>
+        <label style={{ fontSize: 10, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input type="checkbox" checked={autoscroll} onChange={e => setAutoscroll(e.target.checked)} style={{ margin: 0 }} />
+          autoscroll
+        </label>
+        <button onClick={() => setEvents([])} title="Clear" style={{
+          background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer',
+          padding: 2, display: 'flex', alignItems: 'center',
+        }}><Trash2 size={12} /></button>
+        <button onClick={onClose} title="Close" style={{
+          background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer',
+          padding: 2, display: 'flex', alignItems: 'center',
+        }}><X size={14} /></button>
+      </div>
+      <div ref={bodyRef} style={{
+        flex: 1, overflowY: 'auto', padding: '8px 12px',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontSize: 11, lineHeight: 1.55, color: '#d1d5db',
+      }}>
+        {events.length === 0 ? (
+          <div style={{ color: '#4b5563', fontStyle: 'italic' }}>
+            Waiting for events. Trigger a sync above to see live request/response activity.
+          </div>
+        ) : events.map((e, i) => {
+          const r = renderEventLine(e);
+          return <div key={i} style={{ color: r.color, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{r.text}</div>;
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ─── KSEI Upload Card ────────────────────────────────────────────────────────
 
 const KseiUploadCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) => {
@@ -475,6 +619,12 @@ const Admin: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState('');
   const [toast, setToast]     = useState('');
+  const [terminalOpen, setTerminalOpen] = useState(false);
+
+  const handleSetRunning = (s: string) => {
+    setRunning(s);
+    if (s) setTerminalOpen(true);  // any sync trigger opens the terminal
+  };
 
   const load = useCallback(async () => {
     try {
@@ -512,13 +662,23 @@ const Admin: React.FC = () => {
               <h1 style={{ fontSize: 20, fontWeight: 900, color: 'var(--text)', margin: 0, letterSpacing: '-0.02em' }}>Admin Panel</h1>
               <p style={{ fontSize: 11, color: 'var(--muted)', margin: '4px 0 0' }}>Tradevelix system management</p>
             </div>
-            <button onClick={load} disabled={loading} style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
-              borderRadius: 8, background: 'var(--card)', border: '1px solid var(--border)',
-              color: 'var(--sub)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-            }}>
-              <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setTerminalOpen(o => !o)} style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
+                borderRadius: 8, background: terminalOpen ? 'var(--buy-dim)' : 'var(--card)',
+                border: `1px solid ${terminalOpen ? 'var(--buy)' : 'var(--border)'}`,
+                color: terminalOpen ? 'var(--buy)' : 'var(--sub)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}>
+                <Terminal size={13} /> {terminalOpen ? 'Hide Terminal' : 'Show Terminal'}
+              </button>
+              <button onClick={load} disabled={loading} style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
+                borderRadius: 8, background: 'var(--card)', border: '1px solid var(--border)',
+                color: 'var(--sub)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}>
+                <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}
@@ -555,11 +715,12 @@ const Admin: React.FC = () => {
         {tab === 'system' && (
           <SystemTab
             status={status} loading={loading}
-            running={running} setRunning={setRunning}
+            running={running} setRunning={handleSetRunning}
             toast={showToast} reload={load}
           />
         )}
       </div>
+      <LiveTerminal open={terminalOpen} onClose={() => setTerminalOpen(false)} />
     </Layout>
   );
 };

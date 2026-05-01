@@ -10,18 +10,22 @@ Sync schedule:
 - Bulk: Initial setup (~80+ calls)
 """
 
+import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.database import async_session
 from app.dependencies import get_db
 from app.models.system import SyncLog
+from app.services import event_bus
 from app.services.sync_service import SyncService, run_sync_background
 from app.schemas.sync import (
     SyncTriggerResponse,
@@ -337,4 +341,35 @@ async def get_sync_status(db: AsyncSession = Depends(get_db)):
         api_usage=ApiUsageResponse(**api_usage),
         last_daily_sync=last_daily.completed_at if last_daily else None,
         last_weekly_sync=last_weekly.completed_at if last_weekly else None,
+    )
+
+
+# ─── Live event stream (SSE) ────────────────────────────────────────
+
+@router.get("/stream")
+async def stream_sync_events():
+    """Server-Sent Events stream of sync activity: api_request / api_response /
+    api_error / key_event / sync_start / sync_complete.
+
+    Frontend usage:
+        const es = new EventSource('/api/v1/admin/sync/stream');
+        es.onmessage = e => console.log(JSON.parse(e.data));
+    """
+    async def gen():
+        # tell client the stream is live
+        yield f"data: {json.dumps({'type': 'hello', 'subscribers': event_bus.subscriber_count() + 1})}\n\n"
+        try:
+            async for evt in event_bus.subscribe():
+                yield f"data: {json.dumps(evt, default=str)}\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+        },
     )
