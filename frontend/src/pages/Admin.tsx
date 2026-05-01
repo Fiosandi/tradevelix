@@ -415,6 +415,8 @@ interface SyncEvent {
   key_index?: number;
   status?: number | string;
   remaining?: number | null;
+  limit?: number | null;
+  used?: number | null;
   size?: string;
   retried?: boolean;
   action?: string;
@@ -457,9 +459,12 @@ const renderEventLine = (e: SyncEvent): { color: string; text: React.ReactNode }
       return { color: '#9ca3af', text: <>{t}  →  {e.endpoint}{tickerTag}{params}{keyTag}</> };
     }
     case 'api_response': {
-      const left = e.remaining != null ? `, ${e.remaining} left` : '';
+      // Prefer used/limit from upstream headers; fall back to remaining for older events.
+      const quota = e.used != null && e.limit
+        ? ` ${e.used}/${e.limit}`
+        : e.remaining != null ? `, ${e.remaining} left` : '';
       const retry = e.retried ? ' (retry)' : '';
-      return { color: '#86efac', text: <>{t}  ←  {e.status}  {e.size}{tickerTag}{keyTag}{left}{retry}</> };
+      return { color: '#86efac', text: <>{t}  ←  {e.status}  {e.size}{tickerTag}  key#{e.key_index}{quota}{retry}</> };
     }
     case 'api_error':
       return { color: '#fca5a5', text: <>{t}  ✗  {e.status}  {e.endpoint}{tickerTag}{keyTag}  — {e.message}</> };

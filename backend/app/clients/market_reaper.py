@@ -176,8 +176,35 @@ class MarketReaperClient:
         """Total calls across all keys this month."""
         return sum(self._key_calls.values())
 
+    def _pick_least_used_key(self) -> int:
+        """Return the index of the least-used non-flagged key with quota left.
+
+        Picks by smallest call count, breaking ties by lowest index. Returns -1
+        if every key is unusable (caller should raise RateLimitExceeded).
+        """
+        now_month = datetime.utcnow().month
+        best_idx = -1
+        best_calls = None
+        for i in range(len(self._keys)):
+            # Honor month rollover when comparing
+            if self._key_month[i] != now_month:
+                self._key_calls[i] = 0
+                self._key_month[i] = now_month
+                if self._key_bad.get(i) == "429_quota":
+                    self._key_bad.pop(i, None)
+            if i in self._key_bad:
+                continue
+            if self._key_calls[i] >= self.monthly_limit:
+                self._key_bad[i] = "429_quota"
+                continue
+            calls = self._key_calls[i]
+            if best_calls is None or calls < best_calls:
+                best_idx = i
+                best_calls = calls
+        return best_idx
+
     async def _track_usage(self):
-        """Track per-key usage and rotate when a key hits its monthly limit."""
+        """Pick the least-used key, then rate-limit and increment counters."""
         import asyncio
         now = datetime.utcnow()
 
@@ -186,23 +213,17 @@ class MarketReaperClient:
             self._daily_calls = 0
             self._current_day = now.date()
 
-        # Reset per-key monthly counter if new month
-        if self._key_month[self._key_idx] != now.month:
-            self._key_calls[self._key_idx] = 0
-            self._key_month[self._key_idx] = now.month
-            if self._key_bad.get(self._key_idx) == "429_quota":
-                self._key_bad.pop(self._key_idx, None)
-
-        # Rotate off keys we've flagged as unusable
-        if self._key_idx in self._key_bad:
-            logger.warning("Key #%d flagged (%s). Rotating...", self._key_idx + 1, self._key_bad[self._key_idx])
-            self._rotate_key()
-
-        # Rotate if current key is at its limit
-        if self._key_calls[self._key_idx] >= self.monthly_limit:
-            logger.warning("Key #%d at monthly limit (%d). Rotating...", self._key_idx + 1, self.monthly_limit)
-            self._key_bad[self._key_idx] = "429_quota"
-            self._rotate_key()
+        # Round-robin / least-used selection on every call so traffic spreads
+        # across all keys instead of draining key#1 first.
+        chosen = self._pick_least_used_key()
+        if chosen < 0:
+            bad_summary = ", ".join(f"#{i+1}={r}" for i, r in self._key_bad.items()) or "all at limit"
+            raise RateLimitExceeded(
+                f"All {len(self._keys)} API keys unusable (flagged: {bad_summary})."
+            )
+        if chosen != self._key_idx:
+            logger.info("Round-robin: switching to key #%d (calls=%d)", chosen + 1, self._key_calls[chosen])
+            self._key_idx = chosen
 
         # Daily limit check (shared across all keys)
         if self._daily_calls >= self.daily_limit:
@@ -244,6 +265,8 @@ class MarketReaperClient:
                 data = response.json()
                 event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
                                key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                               limit=self._key_limit_header.get(self._key_idx) or self.monthly_limit,
+                               used=self._key_calls.get(self._key_idx),
                                size=self._summarize_response(data))
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
@@ -266,6 +289,8 @@ class MarketReaperClient:
                     data = response.json()
                     event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
                                    key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                                   limit=self._key_limit_header.get(self._key_idx) or self.monthly_limit,
+                                   used=self._key_calls.get(self._key_idx),
                                    size=self._summarize_response(data), retried=True)
                 elif e.response.status_code == 403:
                     self._key_bad[self._key_idx] = "403_unsubscribed"
@@ -284,6 +309,8 @@ class MarketReaperClient:
                     data = response.json()
                     event_bus.emit("api_response", endpoint=endpoint, ticker=ticker, status=response.status_code,
                                    key_index=self._key_idx + 1, remaining=self._key_remaining.get(self._key_idx),
+                                   limit=self._key_limit_header.get(self._key_idx) or self.monthly_limit,
+                                   used=self._key_calls.get(self._key_idx),
                                    size=self._summarize_response(data), retried=True)
                 else:
                     event_bus.emit("api_error", endpoint=endpoint, ticker=ticker, status=e.response.status_code,
