@@ -312,7 +312,16 @@ def main():
         for line in (o or e).splitlines():
             print(f"    {line}")
 
-    rc, o, _ = ssh_exec(client, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/admin/sync/status 2>/dev/null || echo unreachable", timeout=10)
+    # uvicorn needs a moment to bind after a restart; poll for up to 10s
+    rc, o, _ = ssh_exec(
+        client,
+        "for i in 1 2 3 4 5 6 7 8 9 10; do "
+        "  code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/admin/sync/status 2>/dev/null); "
+        "  if [ \"$code\" = '200' ]; then echo \"$code\"; exit 0; fi; "
+        "  sleep 1; "
+        "done; echo \"$code\"",
+        timeout=20,
+    )
     step(f"backend health check: HTTP {o}")
 
     client.close()
