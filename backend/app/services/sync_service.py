@@ -118,18 +118,18 @@ class SyncService:
                    30 = ~1 month (default daily sync)
                    120 = ~4 months (historical backfill)
                    252 = ~1 year
-        Source: /api/chart/{symbol}/daily/latest?limit={limit}
+        Source: yfinance (Yahoo Finance) via the .JK suffix. Free, no quota.
         """
+        from app.clients.yfinance_client import yfinance_client
         sync_log = await self._create_sync_log("DAILY_PRICES")
         records_synced = 0
-        api_calls_used = 0
+        api_calls_used = 0  # yfinance is free; this counter stays 0 here
         errors = []
 
         # Sync OHLCV for each watchlist stock
         for ticker in self.watchlist:
             try:
-                response = await self.api.get_daily_prices(ticker, limit=limit)
-                api_calls_used += 1
+                response = await yfinance_client.get_daily_prices(ticker, limit=limit)
 
                 if not response.get("success"):
                     errors.append(f"{ticker}: API returned unsuccessful")
@@ -451,97 +451,26 @@ class SyncService:
         return sync_log
 
     async def sync_weekly_signals(self) -> SyncLog:
-        """Sync bandar accumulation, distribution, sentiment, smart money. ~48 calls max.
+        """SKIPPED: the upstream RapidAPI plan does not include the
+        /api/analysis/bandar/* endpoints (accumulation, distribution,
+        sentiment, smart_money, pump_dump). The api_signals table and
+        the calculation engine's cross-check logic remain in place — they
+        just operate on empty rows now.
 
-        For each stock: accumulation (1) + distribution (1) + sentiment (1) + smart_money (1) = 4 calls.
-        12 stocks × 4 = ~48 calls for full watchlist.
-        Actually ~36 calls for the IMPLEMENTATION_PLAN's 3 signals per stock (accumulation, distribution, sentiment).
+        Kept as a stub so manual triggers from /admin still write a
+        SyncLog and the live terminal shows a SKIPPED event.
         """
         sync_log = await self._create_sync_log("WEEKLY_SIGNALS")
-        records_synced = 0
-        api_calls_used = 0
-        errors = []
-
-        today = date.today()
-
-        for ticker in self.watchlist:
-            stock = await self._get_or_create_stock(ticker)
-
-            # Accumulation signal
-            try:
-                response = await self.api.get_accumulation(ticker, days=30)
-                api_calls_used += 1
-                records_synced += await self._parse_signal_response(
-                    response, stock.id, today, "accumulation"
-                )
-            except Exception as e:
-                errors.append(f"{ticker}/accumulation: {e}")
-                logger.error(f"Error syncing accumulation for {ticker}: {e}")
-
-            # Distribution signal
-            try:
-                response = await self.api.get_distribution(ticker, days=30)
-                api_calls_used += 1
-                records_synced += await self._parse_signal_response(
-                    response, stock.id, today, "distribution"
-                )
-            except Exception as e:
-                errors.append(f"{ticker}/distribution: {e}")
-                logger.error(f"Error syncing distribution for {ticker}: {e}")
-
-            # Sentiment signal
-            try:
-                response = await self.api.get_sentiment(ticker, days=7)
-                api_calls_used += 1
-                records_synced += await self._parse_signal_response(
-                    response, stock.id, today, "sentiment"
-                )
-            except Exception as e:
-                errors.append(f"{ticker}/sentiment: {e}")
-                logger.error(f"Error syncing sentiment for {ticker}: {e}")
-
-            # Smart money
-            try:
-                response = await self.api.get_smart_money(ticker, days=30)
-                api_calls_used += 1
-                records_synced += await self._parse_signal_response(
-                    response, stock.id, today, "smart_money"
-                )
-            except Exception as e:
-                errors.append(f"{ticker}/smart_money: {e}")
-                logger.error(f"Error syncing smart_money for {ticker}: {e}")
-
-            # Pump-dump detection
-            try:
-                response = await self.api.get_pump_dump(ticker, days=30)
-                api_calls_used += 1
-                records_synced += await self._parse_signal_response(
-                    response, stock.id, today, "pump_dump"
-                )
-            except Exception as e:
-                errors.append(f"{ticker}/pump_dump: {e}")
-                logger.error(f"Error syncing pump_dump for {ticker}: {e}")
-
-            await self.db.flush()
-
-            if api_calls_used >= settings.API_MONTHLY_CALL_LIMIT * 0.9:
-                logger.warning("Approaching monthly API limit, stopping signal sync early")
-                errors.append("Stopped early: approaching monthly API limit")
-                break
-
+        msg = "Skipped: provider plan does not include /analysis/bandar endpoints"
+        logger.info(msg)
         await self._complete_sync_log(
             sync_log,
-            records_synced=records_synced,
-            api_calls_used=api_calls_used,
-            status="PARTIAL" if errors else "SUCCESS",
-            error_message="; ".join(errors) if errors else None,
+            records_synced=0,
+            api_calls_used=0,
+            status="SUCCESS",
+            error_message=msg,
         )
         await self.db.commit()
-
-        logger.info(
-            f"Weekly signals sync complete: {records_synced} records, "
-            f"{api_calls_used} API calls, status={sync_log.status}"
-        )
         return sync_log
 
     async def _parse_signal_response(
@@ -1009,7 +938,13 @@ class SyncService:
         return sync_log
 
     async def sync_major_holders(self) -> SyncLog:
-        """Sync 5%+ ownership disclosure movements from IDX/KSEI. 1 call per stock."""
+        """SKIPPED: the upstream RapidAPI plan does not include /api/emiten/insider.
+
+        Phase 4 of the data-source migration will replace this with an IDX
+        keterbukaan-informasi (5%+ disclosure) scraper. Until then the
+        major_holder_movements table is filled only by KSEI monthly PDF
+        uploads.
+        """
         from datetime import datetime as dt
         sync_log = SyncLog(
             sync_type="MAJOR_HOLDERS", status="PENDING",
@@ -1018,86 +953,13 @@ class SyncService:
         self.db.add(sync_log)
         await self.db.flush()
 
-        api_calls_used = 0
-        records_synced = 0
-        errors = []
-
-        stocks_result = await self.db.execute(
-            select(Stock).where(Stock.is_active == True)
-        )
-        stocks = list(stocks_result.scalars().all())
-
-        for stock in stocks:
-            try:
-                response = await self.api.get_insiders(stock.ticker)
-                api_calls_used += 1
-
-                if not response.get("success"):
-                    continue
-
-                movements = response.get("data", {}).get("movement", [])
-                for m in movements:
-                    try:
-                        raw_date = m.get("date", "")
-                        try:
-                            disclosure_date = dt.strptime(raw_date, "%d %b %y").date()
-                        except Exception:
-                            continue
-
-                        action_raw = m.get("action_type", "")
-                        action = "BUY" if "BUY" in action_raw.upper() else "SELL" if "SELL" in action_raw.upper() else None
-
-                        source_raw = m.get("data_source", {}).get("type", "")
-                        source = "IDX" if "IDX" in source_raw else "KSEI" if "KSEI" in source_raw else "OTHER"
-
-                        nat_raw = m.get("nationality", "")
-                        nationality = "FOREIGN" if "FOREIGN" in nat_raw.upper() else "DOMESTIC"
-
-                        def _int(s: str) -> int:
-                            try: return int(str(s).replace(",", "").replace(".", ""))
-                            except: return 0
-
-                        def _dec(s: str):
-                            try: return Decimal(str(s).replace(",", ""))
-                            except: return None
-
-                        stmt = pg_insert(MajorHolderMovement).values(
-                            id=uuid4(),
-                            stock_id=stock.id,
-                            holder_id=str(m.get("id", "")),
-                            holder_name=m.get("name", "")[:200],
-                            disclosure_date=disclosure_date,
-                            prev_shares=_int(m.get("previous", {}).get("value", "0")),
-                            prev_pct=_dec(m.get("previous", {}).get("percentage", "0")),
-                            curr_shares=_int(m.get("current", {}).get("value", "0")),
-                            curr_pct=_dec(m.get("current", {}).get("percentage", "0")),
-                            change_shares=_int(m.get("changes", {}).get("value", "0")),
-                            change_pct=_dec(m.get("changes", {}).get("percentage", "0")),
-                            nationality=nationality,
-                            action_type=action,
-                            source=source,
-                            price_at_disclosure=_dec(m.get("price_formatted", "0") or "0"),
-                        ).on_conflict_do_nothing(
-                            constraint="uq_major_holder_stock_id_date"
-                        )
-                        await self.db.execute(stmt)
-                        records_synced += 1
-                    except Exception as e:
-                        errors.append(f"{stock.ticker}/row: {e}")
-
-                await self.db.flush()
-
-            except Exception as e:
-                errors.append(f"{stock.ticker}: {e}")
-                logger.error(f"Error syncing major holders for {stock.ticker}: {e}")
-
-        sync_log.status = "PARTIAL" if errors else "SUCCESS"
-        sync_log.api_calls_used = api_calls_used
-        sync_log.records_synced = records_synced
+        msg = "Skipped: provider plan does not include /api/emiten/insider; Phase 4 IDX scraper pending"
+        logger.info(msg)
+        sync_log.status = "SUCCESS"
+        sync_log.api_calls_used = 0
+        sync_log.records_synced = 0
         sync_log.completed_at = dt.utcnow()
-        if errors:
-            sync_log.error_message = "; ".join(errors[:5])
-
+        sync_log.error_message = msg
         await self.db.commit()
         return sync_log
 
