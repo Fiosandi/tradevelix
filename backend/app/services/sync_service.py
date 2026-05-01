@@ -118,18 +118,24 @@ class SyncService:
                    30 = ~1 month (default daily sync)
                    120 = ~4 months (historical backfill)
                    252 = ~1 year
-        Source: yfinance (Yahoo Finance) via the .JK suffix. Free, no quota.
+        Source: RapidAPI /api/chart/{symbol}/daily/latest — this endpoint IS in
+        the current plan tier and works fine (24 calls/day, well under quota).
+
+        Note: yfinance_client (app/clients/yfinance_client.py) is wired and
+        ready as a free alternative, but Yahoo Finance rate-limits the VPS IP
+        (HTTP 429). To switch over, route the yfinance session through a
+        proxy or move to a residential IP.
         """
-        from app.clients.yfinance_client import yfinance_client
         sync_log = await self._create_sync_log("DAILY_PRICES")
         records_synced = 0
-        api_calls_used = 0  # yfinance is free; this counter stays 0 here
+        api_calls_used = 0
         errors = []
 
         # Sync OHLCV for each watchlist stock
         for ticker in self.watchlist:
             try:
-                response = await yfinance_client.get_daily_prices(ticker, limit=limit)
+                response = await self.api.get_daily_prices(ticker, limit=limit)
+                api_calls_used += 1
 
                 if not response.get("success"):
                     errors.append(f"{ticker}: API returned unsuccessful")
