@@ -45,6 +45,7 @@ class MarketReaperClient:
             self._keys = [settings.RAPIDAPI_KEY]
         self._key_idx = 0  # current active key index
         # Per-key monthly call counters
+        self._reserved_keys: set[int] = settings.rapidapi_reserved_indices
         self._key_calls: dict[int, int] = {i: 0 for i in range(len(self._keys))}
         # Per-key headroom from RapidAPI's rate-limit headers (truth source after first call)
         self._key_remaining: dict[int, Optional[int]] = {i: None for i in range(len(self._keys))}
@@ -179,12 +180,13 @@ class MarketReaperClient:
     def _pick_least_used_key(self) -> int:
         """Return the index of the least-used non-flagged key with quota left.
 
-        Picks by smallest call count, breaking ties by lowest index. Returns -1
-        if every key is unusable (caller should raise RateLimitExceeded).
+        Prefers non-reserved keys; only falls back to reserved keys when every
+        non-reserved key is unusable. Picks by smallest call count, breaking
+        ties by lowest index. Returns -1 if every key is unusable.
         """
         now_month = datetime.utcnow().month
-        best_idx = -1
-        best_calls = None
+        eligible: list[tuple[int, int]] = []  # (calls, index) for non-reserved
+        reserve: list[tuple[int, int]] = []   # same, for reserved keys
         for i in range(len(self._keys)):
             # Honor month rollover when comparing
             if self._key_month[i] != now_month:
@@ -197,11 +199,16 @@ class MarketReaperClient:
             if self._key_calls[i] >= self.monthly_limit:
                 self._key_bad[i] = "429_quota"
                 continue
-            calls = self._key_calls[i]
-            if best_calls is None or calls < best_calls:
-                best_idx = i
-                best_calls = calls
-        return best_idx
+            entry = (self._key_calls[i], i)
+            if i in self._reserved_keys:
+                reserve.append(entry)
+            else:
+                eligible.append(entry)
+        pool = eligible or reserve
+        if not pool:
+            return -1
+        pool.sort()
+        return pool[0][1]
 
     async def _track_usage(self):
         """Pick the least-used key, then rate-limit and increment counters."""
@@ -407,6 +414,7 @@ class MarketReaperClient:
                 "last_call_at": last_call.isoformat() if last_call else None,
                 "header_observed": self._key_remaining.get(i) is not None,
                 "flag": self._key_bad.get(i),
+                "reserved": i in self._reserved_keys,
             })
 
         # Sum per-key calls from upstream-truth where available, fall back to local counter

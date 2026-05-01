@@ -15,6 +15,8 @@ interface ApiKeyUsage {
   key_index: number; key_preview: string;
   calls_used: number; calls_limit: number; calls_remaining: number;
   active: boolean; last_call_at: string | null; header_observed: boolean;
+  flag?: string | null;
+  reserved?: boolean;
 }
 interface SyncStatus {
   recent_syncs: SyncLog[];
@@ -230,6 +232,18 @@ const SystemTab: React.FC<{
                         color: k.active ? 'var(--buy)' : 'var(--sub)', border: '1px solid var(--border)',
                       }}>KEY #{k.key_index}{k.active ? ' · ACTIVE' : ''}</span>
                       <code style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--muted)' }}>{k.key_preview}</code>
+                      {k.reserved && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                          background: 'var(--watch-dim)', color: 'var(--watch)', border: '1px solid var(--watch)40',
+                        }} title="Reserved — only used when other keys are exhausted">RESERVED</span>
+                      )}
+                      {k.flag && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                          background: 'var(--sell-dim)', color: 'var(--sell)', border: '1px solid var(--sell)40',
+                        }} title={`Flagged: ${k.flag}`}>{k.flag.toUpperCase()}</span>
+                      )}
                       {!k.header_observed && (
                         <span style={{ fontSize: 9, color: 'var(--muted)', fontStyle: 'italic' }}>(no calls yet — header not observed)</span>
                       )}

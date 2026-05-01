@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # Market Reaper API
     RAPIDAPI_KEY: str = ""
     RAPIDAPI_KEYS: str = ""  # Comma-separated list of keys for rotation
+    RAPIDAPI_RESERVED_KEYS: str = ""  # Comma-separated 1-based indices held in reserve (e.g. "3")
     RAPIDAPI_HOST: str = "indonesia-stock-exchange-idx.p.rapidapi.com"
     API_PLAN: str = "FREE"
     API_RATE_LIMIT_SECONDS: float = 2.0
@@ -53,6 +54,24 @@ class Settings(BaseSettings):
             if keys:
                 return keys
         return [self.RAPIDAPI_KEY] if self.RAPIDAPI_KEY else []
+
+    @property
+    def rapidapi_reserved_indices(self) -> set[int]:
+        """0-based indices of keys held in reserve (only used if all others are exhausted)."""
+        out: set[int] = set()
+        if not self.RAPIDAPI_RESERVED_KEYS:
+            return out
+        for token in self.RAPIDAPI_RESERVED_KEYS.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                idx = int(token) - 1  # config is 1-based, internal is 0-based
+                if idx >= 0:
+                    out.add(idx)
+            except ValueError:
+                pass
+        return out
 
     # Watchlist
     WATCHLIST: str = "BUVA,BIPI,VKTR,BUMI,BRMS,ENRG,SUPA,COCO,PTRO,CUAN,IMPC,INDY"
