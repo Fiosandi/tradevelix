@@ -94,13 +94,20 @@ export const adminApi = {
   triggerPriceHistory: (days: number) =>
     http.post(`/admin/sync/price-history?days=${days}`).then(r => r.data),
 
-  uploadKseiPdf: (file: File, snapshotMonth: string) => {
+  uploadKseiPdf: (
+    file: File,
+    snapshotMonth: string,
+    onUploadProgress?: (pct: number) => void,
+  ) => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('snapshot_month', snapshotMonth);
     return http.post('/admin/ownership/upload', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
+      timeout: 300000,  // 5 min — large PDFs can take 60-90s server-side
+      onUploadProgress: e => {
+        if (onUploadProgress && e.total) onUploadProgress(Math.round((e.loaded / e.total) * 100));
+      },
     }).then(r => r.data);
   },
 

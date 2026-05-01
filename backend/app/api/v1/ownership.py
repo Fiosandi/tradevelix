@@ -24,6 +24,7 @@ from app.models.ksei_ownership import KseiOwnership, KseiSidHistory
 from app.models.stock import Stock
 from app.models.system import UploadJob
 from app.models.user import User
+from app.services import event_bus
 from app.services.ksei_parser import parse_ksei_pdf, parse_sid_summary
 
 logger = logging.getLogger(__name__)
@@ -61,8 +62,12 @@ async def upload_ksei_pdf(
     # Persist file to disk
     safe_name = f"{month.isoformat()}_{uuid.uuid4().hex[:8]}_{Path(file.filename).name}"
     dest = UPLOAD_DIR / safe_name
+    payload = await file.read()
     with dest.open("wb") as f:
-        f.write(await file.read())
+        f.write(payload)
+    file_size_kb = len(payload) // 1024
+
+    event_bus.emit("ksei_upload_start", file_name=file.filename, snapshot_month=month.isoformat(), size_kb=file_size_kb)
 
     job = UploadJob(
         file_name=file.filename,
@@ -109,6 +114,10 @@ async def upload_ksei_pdf(
             )
             await db.execute(stmt)
             rows_processed += 1
+            if rows_processed % 25 == 0:
+                event_bus.emit("ksei_parse_progress", phase="ownership", rows=rows_processed, ticker=parsed["ticker"])
+
+        event_bus.emit("ksei_parse_progress", phase="ownership_done", rows=rows_processed)
 
         for sid_row in parse_sid_summary(dest, month):
             sid_id = ticker_to_id.get(sid_row["ticker"])
@@ -129,11 +138,15 @@ async def upload_ksei_pdf(
 
         job.status = "COMPLETED"
         job.records_processed = rows_processed + sid_processed
+        event_bus.emit("ksei_upload_complete", status="SUCCESS",
+                       ownership_rows=rows_processed, sid_rows=sid_processed,
+                       unknown=len(skipped_unknown_tickers))
 
     except Exception as e:
         job.status = "FAILED"
         job.error_message = str(e)[:500]
         logger.exception("KSEI upload failed for %s", dest)
+        event_bus.emit("ksei_upload_complete", status="FAILED", message=str(e)[:200])
         raise HTTPException(500, f"Parse failed: {e}")
 
     return {

@@ -342,7 +342,7 @@ const SystemTab: React.FC<{
           </div>
 
           {/* KSEI Ownership PDF upload */}
-          <KseiUploadCard toast={toast} />
+          <KseiUploadCard toast={toast} openTerminal={() => setRunning('ksei_upload')} />
         </div>
       </div>
 
@@ -406,7 +406,8 @@ const SystemTab: React.FC<{
 
 interface SyncEvent {
   ts: string;
-  type: 'hello' | 'sync_start' | 'sync_complete' | 'api_request' | 'api_response' | 'api_error' | 'key_event';
+  type: 'hello' | 'sync_start' | 'sync_complete' | 'api_request' | 'api_response' | 'api_error' | 'key_event'
+      | 'ksei_upload_start' | 'ksei_parse_progress' | 'ksei_upload_complete';
   sync_type?: string;
   endpoint?: string;
   params?: Record<string, any>;
@@ -420,6 +421,15 @@ interface SyncEvent {
   reason?: string;
   message?: string;
   subscribers?: number;
+  // KSEI fields
+  file_name?: string;
+  snapshot_month?: string;
+  size_kb?: number;
+  phase?: string;
+  rows?: number;
+  ownership_rows?: number;
+  sid_rows?: number;
+  unknown?: number;
 }
 
 const fmtTs = (iso: string) => {
@@ -455,6 +465,14 @@ const renderEventLine = (e: SyncEvent): { color: string; text: React.ReactNode }
       return { color: '#fca5a5', text: <>{t}  ✗  {e.status}  {e.endpoint}{tickerTag}{keyTag}  — {e.message}</> };
     case 'key_event':
       return { color: '#fbbf24', text: <>{t}  🔑  key#{e.key_index} {e.action} ({e.reason})</> };
+    case 'ksei_upload_start':
+      return { color: '#22d3ee', text: <><b>{t}  ▶ KSEI UPLOAD</b>  {e.file_name} ({e.size_kb} KB) for {e.snapshot_month}</> };
+    case 'ksei_parse_progress':
+      return { color: '#9ca3af', text: <>{t}  ··  parsed {e.rows} {e.phase === 'ownership_done' ? 'rows (ownership done)' : `rows · ${e.ticker}`}</> };
+    case 'ksei_upload_complete':
+      if (e.status === 'SUCCESS')
+        return { color: '#34d399', text: <><b>{t}  ✓ KSEI DONE</b>  {e.ownership_rows} ownership + {e.sid_rows} SID{e.unknown ? ` (skipped ${e.unknown} unknown tickers)` : ''}</> };
+      return { color: '#f87171', text: <><b>{t}  ✗ KSEI FAIL</b>  — {e.message}</> };
     default:
       return { color: '#9ca3af', text: <>{t}  {JSON.stringify(e)}</> };
   }
@@ -548,25 +566,79 @@ const LiveTerminal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, 
 
 // ─── KSEI Upload Card ────────────────────────────────────────────────────────
 
-const KseiUploadCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) => {
+interface UploadJob {
+  id: string;
+  file_name: string;
+  source: string;
+  status: string;
+  records_processed: number;
+  created_at: string | null;
+  error_message: string | null;
+}
+
+interface KseiResult {
+  kind: 'ok' | 'err';
+  ownership_rows?: number;
+  sid_rows?: number;
+  unknown_tickers?: string[];
+  message?: string;
+  at: number;
+}
+
+const KseiUploadCard: React.FC<{ toast: (msg: string) => void; openTerminal: () => void }> = ({ toast, openTerminal }) => {
   const [file, setFile]       = useState<File | null>(null);
   const [month, setMonth]     = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
   });
   const [uploading, setUploading] = useState(false);
+  const [phase, setPhase]     = useState<'idle' | 'uploading' | 'parsing'>('idle');
+  const [uploadPct, setUploadPct] = useState(0);
+  const [result, setResult]   = useState<KseiResult | null>(null);
+  const [jobs, setJobs]       = useState<UploadJob[]>([]);
+
+  const loadJobs = useCallback(async () => {
+    try { setJobs(await adminApi.getKseiJobs()); } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => { loadJobs(); }, [loadJobs]);
 
   const submit = async () => {
     if (!file) { toast('Failed: choose a PDF first'); return; }
     setUploading(true);
+    setResult(null);
+    setUploadPct(0);
+    setPhase('uploading');
+    openTerminal();
     try {
-      const r = await adminApi.uploadKseiPdf(file, month);
-      toast(`Parsed ${r.ownership_rows} rows + ${r.sid_rows} SID${r.unknown_tickers?.length ? ` (skipped ${r.unknown_tickers.length} unknown tickers)` : ''}`);
+      const r = await adminApi.uploadKseiPdf(file, month, pct => {
+        setUploadPct(pct);
+        if (pct >= 100) setPhase('parsing');
+      });
+      setResult({
+        kind: 'ok',
+        ownership_rows: r.ownership_rows,
+        sid_rows: r.sid_rows,
+        unknown_tickers: r.unknown_tickers || [],
+        at: Date.now(),
+      });
+      toast(`Parsed ${r.ownership_rows} rows + ${r.sid_rows} SID`);
       setFile(null);
+      loadJobs();
     } catch (e: any) {
-      toast(`Failed: ${e?.response?.data?.detail || e.message}`);
-    } finally { setUploading(false); }
+      const msg = e?.response?.data?.detail || e.message || 'Upload failed';
+      setResult({ kind: 'err', message: msg, at: Date.now() });
+      toast(`Failed: ${msg}`);
+      loadJobs();
+    } finally {
+      setUploading(false);
+      setPhase('idle');
+    }
   };
+
+  const phaseLabel = phase === 'uploading' ? `Uploading… ${uploadPct}%`
+                    : phase === 'parsing' ? 'Parsing PDF…'
+                    : 'Upload & Parse';
 
   return (
     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px' }}>
@@ -579,6 +651,7 @@ const KseiUploadCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) =
           type="month"
           value={month.slice(0, 7)}
           onChange={e => setMonth(`${e.target.value}-01`)}
+          disabled={uploading}
           style={{
             height: 32, padding: '0 10px', borderRadius: 7,
             background: 'var(--surface)', border: '1px solid var(--border)',
@@ -588,6 +661,7 @@ const KseiUploadCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) =
         <input
           type="file"
           accept="application/pdf"
+          disabled={uploading}
           onChange={e => setFile(e.target.files?.[0] || null)}
           style={{ fontSize: 11, color: 'var(--sub)' }}
         />
@@ -600,8 +674,89 @@ const KseiUploadCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) =
             cursor: !file || uploading ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 12,
             opacity: !file || uploading ? 0.5 : 1,
           }}>
-          {uploading ? <><RefreshCw size={12} className="spin" /> Parsing…</> : <><Play size={12} /> Upload & Parse</>}
+          {uploading ? <><RefreshCw size={12} className="spin" /> {phaseLabel}</> : <><Play size={12} /> Upload & Parse</>}
         </button>
+
+        {/* Live upload progress bar */}
+        {phase === 'uploading' && (
+          <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${uploadPct}%`, background: 'var(--floor)', transition: 'width 0.15s' }} />
+          </div>
+        )}
+        {phase === 'parsing' && (
+          <div style={{ fontSize: 10, color: 'var(--muted)', fontStyle: 'italic' }}>
+            File uploaded. Server is now parsing — open the terminal to see live progress.
+          </div>
+        )}
+
+        {/* Persistent inline result block — does NOT auto-clear */}
+        {result && (
+          <div style={{
+            marginTop: 4, padding: '10px 12px', borderRadius: 7, fontSize: 11, lineHeight: 1.5,
+            background: result.kind === 'ok' ? 'var(--buy-dim)' : 'var(--sell-dim)',
+            border: `1px solid ${result.kind === 'ok' ? 'var(--buy)' : 'var(--sell)'}40`,
+            color: result.kind === 'ok' ? 'var(--buy)' : 'var(--sell)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                {result.kind === 'ok' ? (
+                  <>
+                    <div style={{ fontWeight: 700 }}>✓ Upload complete</div>
+                    <div style={{ fontFamily: 'monospace', marginTop: 3, color: 'var(--text)' }}>
+                      {result.ownership_rows} ownership rows · {result.sid_rows} SID rows
+                    </div>
+                    {result.unknown_tickers && result.unknown_tickers.length > 0 && (
+                      <div style={{ fontSize: 10, marginTop: 3, color: 'var(--muted)' }}>
+                        Skipped {result.unknown_tickers.length} unknown ticker{result.unknown_tickers.length === 1 ? '' : 's'}: {result.unknown_tickers.slice(0, 8).join(', ')}{result.unknown_tickers.length > 8 ? '…' : ''}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontWeight: 700 }}>✗ Upload failed</div>
+                    <div style={{ fontSize: 10, marginTop: 3, color: 'var(--text)', wordBreak: 'break-word' }}>
+                      {result.message}
+                    </div>
+                  </>
+                )}
+              </div>
+              <button onClick={() => setResult(null)} style={{
+                background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer',
+                padding: 0, opacity: 0.6,
+              }}><X size={12} /></button>
+            </div>
+          </div>
+        )}
+
+        {/* Recent jobs */}
+        {jobs.length > 0 && (
+          <details style={{ marginTop: 6 }}>
+            <summary style={{
+              fontSize: 10, color: 'var(--muted)', cursor: 'pointer',
+              textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700,
+            }}>Recent uploads ({jobs.length})</summary>
+            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, fontFamily: 'monospace' }}>
+              {jobs.slice(0, 5).map(j => {
+                const ok = j.status === 'COMPLETED';
+                const fail = j.status === 'FAILED';
+                const col = ok ? 'var(--buy)' : fail ? 'var(--sell)' : 'var(--watch)';
+                return (
+                  <div key={j.id} style={{ display: 'flex', gap: 6, alignItems: 'center', color: 'var(--sub)' }}>
+                    <span style={{
+                      fontSize: 8, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                      background: `${col}25`, color: col, minWidth: 60, textAlign: 'center',
+                    }}>{j.status}</span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {j.file_name}
+                    </span>
+                    <span style={{ color: 'var(--muted)' }}>{j.records_processed} rows</span>
+                    <span style={{ color: 'var(--muted)' }}>{j.created_at ? j.created_at.slice(5, 16).replace('T', ' ') : '—'}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
       </div>
     </div>
   );
