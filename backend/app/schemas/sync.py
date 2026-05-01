@@ -44,6 +44,8 @@ class ApiKeyUsage(BaseModel):
     active: bool = False
     last_call_at: Optional[str] = None
     header_observed: bool = False
+    flag: Optional[str] = None
+    reserved: bool = False
 
 
 class ApiUsageResponse(BaseModel):
