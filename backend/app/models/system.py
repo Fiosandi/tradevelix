@@ -74,6 +74,23 @@ class UploadJob(Base, TimestampMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ExternalCredential(Base, TimestampMixin):
+    """Encrypted credentials for external scraped services (Stockbit, RTI, etc.).
+
+    Cookies are Fernet-encrypted before storage using STOCKBIT_FERNET_KEY from .env.
+    `service_name` is the unique key — one row per service, paste-to-overwrite.
+    """
+    __tablename__ = "external_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    encrypted_blob: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet token (base64 ASCII)
+    note: Mapped[str] = mapped_column(String(200), nullable=True)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(20), nullable=True)  # VALID, EXPIRED, INVALID
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ApiRawResponse(Base, TimestampMixin):
     """Store raw API responses for debugging and later analysis.
     Every API call response is saved here before processing.

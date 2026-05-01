@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "remora_password"
     DATABASE_URL: str = "postgresql+asyncpg://remora:remora_password@localhost:5432/remora"
 
+    # Symmetric encryption key for stored scraped-service cookies (Fernet, base64).
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    STOCKBIT_FERNET_KEY: str = ""
+
     # Market Reaper API
     RAPIDAPI_KEY: str = ""
     RAPIDAPI_KEYS: str = ""  # Comma-separated list of keys for rotation

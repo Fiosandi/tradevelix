@@ -13,6 +13,7 @@ from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.ownership import router as ownership_router
 from app.api.v1.alerts import router as alerts_router
+from app.api.v1.admin_credentials import router as admin_credentials_router
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +65,4 @@ app.include_router(sync_router,      prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(ownership_router, prefix="/api/v1")
 app.include_router(alerts_router,    prefix="/api/v1")
+app.include_router(admin_credentials_router, prefix="/api/v1")

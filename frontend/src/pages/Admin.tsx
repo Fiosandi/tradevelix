@@ -357,6 +357,9 @@ const SystemTab: React.FC<{
 
           {/* KSEI Ownership PDF upload */}
           <KseiUploadCard toast={toast} openTerminal={() => setRunning('ksei_upload')} />
+
+          {/* Stockbit Session — Phase 2 broker scraper */}
+          <StockbitSessionCard toast={toast} />
         </div>
       </div>
 
@@ -605,6 +608,144 @@ interface KseiResult {
   message?: string;
   at: number;
 }
+
+// ─── Stockbit Session Card (Phase 2 broker scraper) ─────────────────────────
+
+interface StockbitStatus {
+  present: boolean;
+  status: string | null;
+  last_used_at: string | null;
+  note: string | null;
+  created_at?: string | null;
+}
+
+const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) => {
+  const [status, setStatus] = useState<StockbitStatus | null>(null);
+  const [paste, setPaste]   = useState('');
+  const [note, setNote]     = useState('');
+  const [busy, setBusy]     = useState(false);
+
+  const load = useCallback(async () => {
+    try { setStatus(await adminApi.getStockbitStatus()); } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const submit = async () => {
+    if (!paste.trim()) { toast('Failed: paste your Stockbit cookies first'); return; }
+    let parsed: any;
+    try { parsed = JSON.parse(paste); }
+    catch { toast('Failed: not valid JSON'); return; }
+    setBusy(true);
+    try {
+      const r = await adminApi.saveStockbitCookies(parsed, note || undefined);
+      toast(`Saved ${r.cookie_count} cookies (${r.names_preview?.join(', ')}…)`);
+      setPaste('');
+      setNote('');
+      load();
+    } catch (e: any) {
+      toast(`Failed: ${e?.response?.data?.detail || e.message}`);
+    } finally { setBusy(false); }
+  };
+
+  const clear = async () => {
+    if (!confirm('Delete stored Stockbit session?')) return;
+    try { await adminApi.deleteStockbitCookies(); toast('Stockbit session removed'); load(); }
+    catch (e: any) { toast(`Failed: ${e?.response?.data?.detail || e.message}`); }
+  };
+
+  const badgeColor =
+    status?.status === 'VALID'   ? 'var(--buy)'
+    : status?.status === 'EXPIRED' ? 'var(--sell)'
+    : status?.present              ? 'var(--watch)'
+    : 'var(--muted)';
+  const badgeLabel =
+    !status?.present       ? 'NOT SET'
+    : status.status || 'UNKNOWN';
+
+  return (
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>Stockbit Session</div>
+        <span style={{
+          fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+          background: `${badgeColor}25`, color: badgeColor, border: `1px solid ${badgeColor}40`,
+        }}>{badgeLabel}</span>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 8, lineHeight: 1.5 }}>
+        Paste your browser session cookies for Stockbit (broker-summary scraper, Phase 2). Encrypted at rest.
+      </div>
+      <details style={{ marginBottom: 8 }}>
+        <summary style={{ fontSize: 10, color: 'var(--muted)', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+          How to capture
+        </summary>
+        <ol style={{ fontSize: 11, color: 'var(--sub)', marginTop: 6, paddingLeft: 18, lineHeight: 1.5 }}>
+          <li>Log in to <code>stockbit.com</code> in your browser (handles 2FA).</li>
+          <li>Install <a href="https://chrome.google.com/webstore/detail/editthiscookie/fngmhnnpilhplaeedifhccceomclgfbg" target="_blank" rel="noreferrer" style={{ color: 'var(--floor)' }}>EditThisCookie</a> or open DevTools → Application → Cookies.</li>
+          <li>Export ALL cookies for <code>stockbit.com</code> as JSON (EditThisCookie ⇒ Export).</li>
+          <li>Paste below, hit Save.</li>
+        </ol>
+      </details>
+      {status?.present && (
+        <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', marginBottom: 8 }}>
+          last used: {status.last_used_at ? fmtTs(status.last_used_at) : '—'}
+          {status.note && <> · note: {status.note}</>}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <textarea
+          value={paste}
+          onChange={e => setPaste(e.target.value)}
+          placeholder='[{"name":"_session_id","value":"..."}, ...] or {"_session_id":"...", ...}'
+          rows={4}
+          disabled={busy}
+          style={{
+            padding: '8px 10px', borderRadius: 7, fontSize: 10, fontFamily: 'monospace',
+            background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)',
+            resize: 'vertical', minHeight: 60,
+          }}
+        />
+        <input
+          type="text"
+          placeholder="optional note (e.g. browser/device used)"
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          disabled={busy}
+          style={{
+            height: 28, padding: '0 10px', borderRadius: 7, fontSize: 11,
+            background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)',
+          }}
+        />
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={submit}
+            disabled={busy || !paste.trim()}
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '8px 13px', borderRadius: 8, fontWeight: 700, fontSize: 12,
+              border: '1px solid var(--floor)40', background: 'var(--floor-dim)', color: 'var(--floor)',
+              cursor: busy || !paste.trim() ? 'not-allowed' : 'pointer',
+              opacity: busy || !paste.trim() ? 0.5 : 1,
+            }}>
+            {busy ? <><RefreshCw size={12} className="spin" /> Saving…</> : <><Play size={12} /> Save</>}
+          </button>
+          {status?.present && (
+            <button
+              onClick={clear}
+              disabled={busy}
+              style={{
+                padding: '8px 13px', borderRadius: 8, fontWeight: 700, fontSize: 12,
+                border: '1px solid var(--sell)40', background: 'transparent', color: 'var(--sell)',
+                cursor: busy ? 'not-allowed' : 'pointer',
+              }}>
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const KseiUploadCard: React.FC<{ toast: (msg: string) => void; openTerminal: () => void }> = ({ toast, openTerminal }) => {
   const [file, setFile]       = useState<File | null>(null);
