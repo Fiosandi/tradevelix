@@ -50,6 +50,9 @@ class MarketReaperClient:
         self._key_limit_header: dict[int, Optional[int]] = {i: None for i in range(len(self._keys))}
         self._key_last_call: dict[int, Optional[datetime]] = {i: None for i in range(len(self._keys))}
         self._key_month: dict[int, int] = {i: datetime.utcnow().month for i in range(len(self._keys))}
+        # Reasons a key was marked unusable in this process. Cleared on month-rollover
+        # for "429_quota"; never cleared for "403_unsubscribed" since that's a config issue.
+        self._key_bad: dict[int, str] = {}
 
         self.rate_limit_seconds = settings.API_RATE_LIMIT_SECONDS
         self.monthly_limit = settings.API_MONTHLY_CALL_LIMIT
@@ -146,19 +149,25 @@ class MarketReaperClient:
         }
 
     def _rotate_key(self):
-        """Move to the next available key that hasn't hit its monthly limit."""
+        """Move to the next available key that isn't flagged or at its monthly limit."""
         for _ in range(len(self._keys)):
             self._key_idx = (self._key_idx + 1) % len(self._keys)
             now_month = datetime.utcnow().month
             if self._key_month[self._key_idx] != now_month:
                 self._key_calls[self._key_idx] = 0
                 self._key_month[self._key_idx] = now_month
+                # Quota resets on month rollover; subscription status does not
+                if self._key_bad.get(self._key_idx) == "429_quota":
+                    self._key_bad.pop(self._key_idx, None)
+            if self._key_idx in self._key_bad:
+                continue
             if self._key_calls[self._key_idx] < self.monthly_limit:
                 logger.info("Rotated to API key #%d", self._key_idx + 1)
                 return
+        bad_summary = ", ".join(f"#{i+1}={r}" for i, r in self._key_bad.items()) or "none flagged"
         raise RateLimitExceeded(
-            f"All {len(self._keys)} API keys have reached their monthly limit "
-            f"({self.monthly_limit} calls each). Wait until next month."
+            f"All {len(self._keys)} API keys are unusable "
+            f"(monthly_limit={self.monthly_limit}, flagged: {bad_summary})."
         )
 
     @property
@@ -180,10 +189,18 @@ class MarketReaperClient:
         if self._key_month[self._key_idx] != now.month:
             self._key_calls[self._key_idx] = 0
             self._key_month[self._key_idx] = now.month
+            if self._key_bad.get(self._key_idx) == "429_quota":
+                self._key_bad.pop(self._key_idx, None)
+
+        # Rotate off keys we've flagged as unusable
+        if self._key_idx in self._key_bad:
+            logger.warning("Key #%d flagged (%s). Rotating...", self._key_idx + 1, self._key_bad[self._key_idx])
+            self._rotate_key()
 
         # Rotate if current key is at its limit
         if self._key_calls[self._key_idx] >= self.monthly_limit:
             logger.warning("Key #%d at monthly limit (%d). Rotating...", self._key_idx + 1, self.monthly_limit)
+            self._key_bad[self._key_idx] = "429_quota"
             self._rotate_key()
 
         # Daily limit check (shared across all keys)
@@ -226,13 +243,26 @@ class MarketReaperClient:
                 if e.response.status_code == 429:
                     import asyncio
                     self._capture_rate_limit_headers(e.response)
-                    logger.warning("429 rate-limited. Rotating key and retrying in 5s...")
+                    self._key_bad[self._key_idx] = "429_quota"
+                    logger.warning("429 on key #%d — flagged 429_quota, rotating and retrying in 5s...", self._key_idx + 1)
                     try:
                         self._rotate_key()
                     except RateLimitExceeded:
                         logger.error("All keys exhausted on 429.")
                         raise
                     await asyncio.sleep(5)
+                    response = await client.get(url, headers=self.headers, params=params or {})
+                    self._capture_rate_limit_headers(response)
+                    response.raise_for_status()
+                    data = response.json()
+                elif e.response.status_code == 403:
+                    self._key_bad[self._key_idx] = "403_unsubscribed"
+                    logger.warning("403 on key #%d — flagged 403_unsubscribed, rotating and retrying...", self._key_idx + 1)
+                    try:
+                        self._rotate_key()
+                    except RateLimitExceeded:
+                        logger.error("All keys exhausted on 403.")
+                        raise
                     response = await client.get(url, headers=self.headers, params=params or {})
                     self._capture_rate_limit_headers(response)
                     response.raise_for_status()
@@ -303,6 +333,7 @@ class MarketReaperClient:
                 "active": i == self._key_idx,
                 "last_call_at": last_call.isoformat() if last_call else None,
                 "header_observed": self._key_remaining.get(i) is not None,
+                "flag": self._key_bad.get(i),
             })
 
         # Sum per-key calls from upstream-truth where available, fall back to local counter

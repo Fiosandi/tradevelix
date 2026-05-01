@@ -887,6 +887,9 @@ class SyncService:
         errors = []
 
         today = date.today()
+        # T+2 settlement: API returns inflated/forbidden data for ranges ending
+        # within the current trading week. Cap any to_date to today-2d.
+        safe_end = today - timedelta(days=2)
         # Use months (not weeks) — one call per month per stock
         months = max(1, weeks // 4)  # convert weeks param to ~months
 
@@ -897,6 +900,10 @@ class SyncService:
             import calendar
             last_day = calendar.monthrange(target.year, target.month)[1]
             week_end = target.replace(day=last_day)
+            if week_end > safe_end:
+                if week_start > safe_end:
+                    continue
+                week_end = safe_end
 
             for ticker in self.watchlist:
                 try:
@@ -988,7 +995,7 @@ class SyncService:
                     errors.append(f"Rate limit exceeded: {e}")
                     break
                 except Exception as e:
-                    errors.append(f"{ticker} w{week_offset}: {e}")
+                    errors.append(f"{ticker} m{month_offset}: {e}")
                     continue
 
         await self._complete_sync_log(
