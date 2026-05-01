@@ -277,7 +277,8 @@ def main():
     banner("Step 7 - Restart backend")
     restarted = False
     if service:
-        rc, o, e = ssh_exec(client, f"sudo -n systemctl restart {service} 2>&1", timeout=30)
+        # Restart can be slow if a background sync needs to drain — give it 2 min.
+        rc, o, e = ssh_exec(client, f"sudo -n systemctl restart {service} 2>&1", timeout=120)
         if rc == 0:
             step(f"[OK] systemctl restart {service}")
             restarted = True
