@@ -617,6 +617,7 @@ interface StockbitStatus {
   last_used_at: string | null;
   note: string | null;
   created_at?: string | null;
+  expires_at?: string | null;
 }
 
 const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) => {
@@ -632,14 +633,19 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
   useEffect(() => { load(); }, [load]);
 
   const submit = async () => {
-    if (!paste.trim()) { toast('Failed: paste your Stockbit cookies first'); return; }
-    let parsed: any;
-    try { parsed = JSON.parse(paste); }
-    catch { toast('Failed: not valid JSON'); return; }
+    const raw = paste.trim();
+    if (!raw) { toast('Failed: paste your Stockbit bearer token first'); return; }
+    // Strip "Bearer " if pasted from a header
+    const cleaned = raw.toLowerCase().startsWith('bearer ') ? raw.slice(7).trim() : raw;
+    if (!cleaned.includes('eyJ')) {
+      toast('Failed: token must contain a JWT (starts with eyJ)');
+      return;
+    }
     setBusy(true);
     try {
-      const r = await adminApi.saveStockbitCookies(parsed, note || undefined);
-      toast(`Saved ${r.cookie_count} cookies (${r.names_preview?.join(', ')}…)`);
+      const r = await adminApi.saveStockbitToken(cleaned, note || undefined);
+      const exp = r.expires_at ? ` · expires ${fmtTs(r.expires_at)}` : '';
+      toast(`Saved Stockbit token${exp}`);
       setPaste('');
       setNote('');
       load();
@@ -650,7 +656,7 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
 
   const clear = async () => {
     if (!confirm('Delete stored Stockbit session?')) return;
-    try { await adminApi.deleteStockbitCookies(); toast('Stockbit session removed'); load(); }
+    try { await adminApi.deleteStockbitToken(); toast('Stockbit session removed'); load(); }
     catch (e: any) { toast(`Failed: ${e?.response?.data?.detail || e.message}`); }
   };
 
@@ -673,7 +679,7 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
         }}>{badgeLabel}</span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 8, lineHeight: 1.5 }}>
-        Paste your browser session cookies for Stockbit (broker-summary scraper, Phase 2). Encrypted at rest.
+        Paste your Stockbit bearer JWT (broker-summary scraper, Phase 2). Encrypted at rest. Token validity is ~24h — re-paste when it expires.
       </div>
       <details style={{ marginBottom: 8 }}>
         <summary style={{ fontSize: 10, color: 'var(--muted)', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
@@ -681,14 +687,15 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
         </summary>
         <ol style={{ fontSize: 11, color: 'var(--sub)', marginTop: 6, paddingLeft: 18, lineHeight: 1.5 }}>
           <li>Log in to <code>stockbit.com</code> in your browser (handles 2FA).</li>
-          <li>Install <a href="https://chrome.google.com/webstore/detail/editthiscookie/fngmhnnpilhplaeedifhccceomclgfbg" target="_blank" rel="noreferrer" style={{ color: 'var(--floor)' }}>EditThisCookie</a> or open DevTools → Application → Cookies.</li>
-          <li>Export ALL cookies for <code>stockbit.com</code> as JSON (EditThisCookie ⇒ Export).</li>
+          <li>Open DevTools → Network tab. Visit any stock page (e.g. <code>stockbit.com/symbol/BBCA</code>).</li>
+          <li>Find a request to <code>exodus.stockbit.com</code> and copy the <code>Authorization</code> header value (the long <code>eyJ…</code> string, with or without the <code>Bearer</code> prefix).</li>
           <li>Paste below, hit Save.</li>
         </ol>
       </details>
       {status?.present && (
         <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', marginBottom: 8 }}>
           last used: {status.last_used_at ? fmtTs(status.last_used_at) : '—'}
+          {status.expires_at && <> · expires: {fmtTs(status.expires_at)}</>}
           {status.note && <> · note: {status.note}</>}
         </div>
       )}
@@ -696,7 +703,7 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
         <textarea
           value={paste}
           onChange={e => setPaste(e.target.value)}
-          placeholder='[{"name":"_session_id","value":"..."}, ...] or {"_session_id":"...", ...}'
+          placeholder='eyJhbGciOiJSUzI1NiIs… (paste the full JWT, with or without "Bearer " prefix)'
           rows={4}
           disabled={busy}
           style={{

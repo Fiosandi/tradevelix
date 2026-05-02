@@ -9,7 +9,9 @@ Rate limits:
 - 100 calls/day max
 """
 
+import asyncio
 import logging
+import random
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import List, Optional
@@ -287,16 +289,21 @@ class SyncService:
     # ─── Weekly Sync ──────────────────────────────────────────────────
 
     async def sync_weekly_broker_summary(self) -> SyncLog:
-        """Sync broker summary for all watchlist stocks. ~12-19 calls.
+        """Sync broker summary for all watchlist stocks via Stockbit (Phase 2).
 
-        Source: /api/market-detector/broker-summary/{symbol}?from=X&to=Y
-        Parses response.data.data.broker_summary.brokers_buy/sell into
-        broker_summaries + broker_entries tables.
-        Also parses bandar_detector summary data.
+        Source: https://exodus.stockbit.com/marketdetectors/{ticker}
+        Auth:   admin-supplied Bearer JWT from external_credentials.
+        Falls back to no-op (logs error) if token missing/expired.
+
+        Same broker_summaries + broker_entries persistence as before — the
+        Stockbit response shape matches what _persist code already consumes.
         """
+        from app.clients.stockbit_client import (
+            stockbit_client, StockbitSessionMissing, StockbitSessionExpired,
+        )
         sync_log = await self._create_sync_log("WEEKLY_BROKER")
         records_synced = 0
-        api_calls_used = 0
+        api_calls_used = 0  # Stockbit is unmetered; counter stays 0
         errors = []
 
         # Three Doors analysis is behavioural — it captures WHO changed their pattern
@@ -315,17 +322,29 @@ class SyncService:
         to_date   = today - timedelta(days=days_since_friday)  # last settled Friday
         from_date = date(to_date.year, 1, 1)                   # Jan 1 = YTD
 
-        for ticker in self.watchlist:
+        for idx, ticker in enumerate(self.watchlist):
+            # Human-like pacing: 1.5–3.5s between tickers so 24 sequential requests
+            # don't look like a burst. Skip the wait before the first ticker.
+            if idx > 0:
+                await asyncio.sleep(random.uniform(1.5, 3.5))
             try:
-                response = await self.api.get_broker_summary(
-                    ticker,
-                    from_date=from_date.isoformat(),
-                    to_date=to_date.isoformat(),  # last completed trading day (never weekend)
-                )
-                api_calls_used += 1
+                try:
+                    response = await stockbit_client.get_broker_summary(
+                        self.db, ticker,
+                        from_date=from_date,
+                        to_date=to_date,
+                    )
+                except StockbitSessionMissing as e:
+                    errors.append(f"{ticker}: {e}")
+                    logger.error(f"Stockbit token missing — aborting broker sync: {e}")
+                    break  # no point trying other tickers
+                except StockbitSessionExpired as e:
+                    errors.append(f"{ticker}: {e}")
+                    logger.error(f"Stockbit token expired — aborting broker sync: {e}")
+                    break
 
                 if not response.get("success"):
-                    errors.append(f"{ticker}: API returned unsuccessful")
+                    errors.append(f"{ticker}: Stockbit returned unsuccessful")
                     continue
 
                 # Parse response - note nested structure: data.data
@@ -810,12 +829,15 @@ class SyncService:
     # ─── Combined Sync Methods ────────────────────────────────────────
 
     async def sync_broker_history(self, weeks: int = 12) -> SyncLog:
-        """Backfill broker summaries for the past N months (one call per month per stock).
+        """Backfill broker summaries for the past N months via Stockbit (Phase 2).
 
-        The Market Reaper broker-summary API returns NET CUMULATIVE positions for the
-        selected period. Monthly windows give meaningful, stable accumulation data.
-        Cost: 24 stocks × months API calls.
+        Stockbit's marketdetectors endpoint returns NET CUMULATIVE positions for
+        the selected from/to range. Monthly windows give meaningful, stable
+        accumulation data. Cost: 24 stocks × months requests, no quota.
         """
+        from app.clients.stockbit_client import (
+            stockbit_client, StockbitSessionMissing, StockbitSessionExpired,
+        )
         sync_log = await self._create_sync_log("BROKER_HISTORY")
         records_synced = 0
         api_calls_used = 0
@@ -840,14 +862,23 @@ class SyncService:
                     continue
                 week_end = safe_end
 
-            for ticker in self.watchlist:
+            for t_idx, ticker in enumerate(self.watchlist):
+                if t_idx > 0 or month_offset > 0:
+                    await asyncio.sleep(random.uniform(1.5, 3.5))
                 try:
-                    response = await self.api.get_broker_summary(
-                        ticker,
-                        from_date=week_start.isoformat(),
-                        to_date=week_end.isoformat(),
-                    )
-                    api_calls_used += 1
+                    try:
+                        response = await stockbit_client.get_broker_summary(
+                            self.db, ticker,
+                            from_date=week_start, to_date=week_end,
+                        )
+                    except StockbitSessionMissing as e:
+                        errors.append(f"{ticker} m{month_offset}: {e}")
+                        logger.error(f"Stockbit token missing — aborting backfill: {e}")
+                        return sync_log
+                    except StockbitSessionExpired as e:
+                        errors.append(f"{ticker} m{month_offset}: {e}")
+                        logger.error(f"Stockbit token expired — aborting backfill: {e}")
+                        return sync_log
                     if not response.get("success"):
                         continue
 

@@ -123,10 +123,10 @@ export const adminApi = {
   getStockbitStatus: () =>
     http.get('/admin/credentials/stockbit/status').then(r => r.data),
 
-  saveStockbitCookies: (cookies: any, note?: string) =>
-    http.post('/admin/credentials/stockbit', { cookies, note }).then(r => r.data),
+  saveStockbitToken: (token: string, note?: string) =>
+    http.post('/admin/credentials/stockbit', { token, note }).then(r => r.data),
 
-  deleteStockbitCookies: () =>
+  deleteStockbitToken: () =>
     http.delete('/admin/credentials/stockbit').then(r => r.data),
 };
 

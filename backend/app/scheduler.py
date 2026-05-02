@@ -10,6 +10,7 @@ Docker service:  command: python -m app.scheduler
 
 import asyncio
 import logging
+import random
 import sys
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -45,13 +46,18 @@ def _day_abbr(day: str) -> str:
 def setup_jobs() -> None:
     """Register all scheduled jobs from settings."""
 
+    # ±20-minute jitter so the schedule doesn't fire at perfectly round times,
+    # which is one of the cheapest tells that a service account is automated.
+    daily_jitter  = random.randint(0, 39)   # added to SYNC_DAILY_MINUTE
+    weekly_jitter = random.randint(0, 39)   # minute-of-hour for weekly
+
     # Daily: OHLCV prices + movers (~27 API calls, Mon-Fri after close)
     scheduler.add_job(
         run_sync_background,
         CronTrigger(
             day_of_week="mon-fri",
             hour=settings.SYNC_DAILY_HOUR,
-            minute=settings.SYNC_DAILY_MINUTE,
+            minute=(settings.SYNC_DAILY_MINUTE + daily_jitter) % 60,
             timezone=WIB,
         ),
         args=["daily"],
@@ -66,7 +72,7 @@ def setup_jobs() -> None:
         CronTrigger(
             day_of_week=_day_abbr(settings.SYNC_WEEKLY_DAY),
             hour=settings.SYNC_WEEKLY_HOUR,
-            minute=0,
+            minute=weekly_jitter,
             timezone=WIB,
         ),
         args=["weekly"],

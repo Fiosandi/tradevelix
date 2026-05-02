@@ -28,43 +28,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/credentials", tags=["admin", "credentials"])
 
 
-class StockbitCookiesPayload(BaseModel):
-    """Either a dict {name: value} or an EditThisCookie array of {name, value, ...}."""
-    cookies: Any = Field(..., description="Cookies as dict or EditThisCookie array")
+class StockbitTokenPayload(BaseModel):
+    """Stockbit bearer token. Accepts a raw JWT string or any JSON shape that
+    contains one (e.g. {"token": "..."}, {"authorization": "Bearer ..."}, or
+    a legacy EditThisCookie array — the client will extract the eyJ-prefixed
+    value)."""
+    token: Any = Field(..., description="Bearer JWT (raw eyJ... string or wrapper object)")
     note: str | None = Field(None, max_length=200)
 
 
 @router.post("/stockbit")
 async def upsert_stockbit_session(
-    payload: StockbitCookiesPayload,
+    payload: StockbitTokenPayload,
     db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    """Paste your Stockbit session cookies (from DevTools or EditThisCookie).
-    Stored Fernet-encrypted; never logged or echoed back.
+    """Paste your Stockbit bearer JWT (from a logged-in browser session — copy
+    the Authorization header value). Stored Fernet-encrypted; never logged
+    or echoed back.
     """
     if not current.is_admin:
         raise HTTPException(403, "Admin only")
 
-    cookies = payload.cookies
-    if isinstance(cookies, list):
-        # EditThisCookie / Chrome DevTools "Copy all as JSON" format
-        norm = {c["name"]: c["value"] for c in cookies
-                if isinstance(c, dict) and c.get("name") and c.get("value")}
-    elif isinstance(cookies, dict):
-        norm = {str(k): str(v) for k, v in cookies.items() if v}
+    raw = payload.token
+    # Normalize to a JSON string the client's _extract_token can parse
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.lower().startswith("bearer "):
+            s = s[7:].strip()
+        if not s.startswith("eyJ") and "eyJ" not in s:
+            raise HTTPException(400, "Token does not look like a JWT (expected to start with 'eyJ')")
+        blob_to_store = s if s.startswith("eyJ") else json.dumps({"token": s})
+    elif isinstance(raw, (dict, list)):
+        blob_to_store = json.dumps(raw)
     else:
-        raise HTTPException(400, "cookies must be a dict or list of {name, value} objects")
+        raise HTTPException(400, "token must be a string or JSON object")
 
-    if not norm:
-        raise HTTPException(400, "no cookies parsed from payload")
+    # Validate by extracting + checking exp (don't fail the save if exp parse fails)
+    from app.clients.stockbit_client import StockbitClient
+    extracted = StockbitClient._extract_token(blob_to_store)
+    if not extracted.startswith("eyJ"):
+        raise HTTPException(400, "Could not find a JWT in the payload")
+    expires_at = StockbitClient.token_expiry(extracted)
 
     try:
-        blob = encrypt(json.dumps(norm))
+        blob = encrypt(blob_to_store)
     except CryptoConfigError as e:
         raise HTTPException(500, f"Encryption not configured: {e}")
 
-    # Upsert by service_name
     stmt = pg_insert(ExternalCredential).values(
         id=uuid.uuid4(),
         service_name=STOCKBIT_SERVICE,
@@ -87,8 +98,7 @@ async def upsert_stockbit_session(
     return {
         "status": "saved",
         "service": STOCKBIT_SERVICE,
-        "cookie_count": len(norm),
-        "names_preview": sorted(norm.keys())[:8],
+        "expires_at": expires_at.isoformat() if expires_at else None,
     }
 
 
