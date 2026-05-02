@@ -53,13 +53,19 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
             {theme === 'dark' ? 'Light mode' : 'Dark mode'}
           </button>
           {user && (
-            <button
-              onClick={() => { logout(); nav('/login'); }}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-sub hover:bg-sell-dim hover:text-sell"
-            >
-              <LogOut size={14} /> Sign out
-              <span className="ml-auto text-[10px] text-muted truncate">{user.username}</span>
-            </button>
+            <>
+              <div className="px-3 py-1 text-[10px] text-muted truncate">
+                {user.username}
+                {user.is_admin && <span className="ml-1 text-buy">· admin</span>}
+                {user.is_paid  && <span className="ml-1 text-floor">· paid</span>}
+              </div>
+              <button
+                onClick={() => { logout(); nav('/login'); }}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-sub hover:bg-sell-dim hover:text-sell"
+              >
+                <LogOut size={14} /> Sign out
+              </button>
+            </>
           )}
         </div>
       </aside>
