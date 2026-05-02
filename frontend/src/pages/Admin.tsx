@@ -359,7 +359,7 @@ const SystemTab: React.FC<{
           <KseiUploadCard toast={toast} openTerminal={() => setRunning('ksei_upload')} />
 
           {/* Stockbit Session — Phase 2 broker scraper */}
-          <StockbitSessionCard toast={toast} />
+          <StockbitSessionCard toast={toast} openTerminal={() => setRunning('broker-summary')} />
         </div>
       </div>
 
@@ -620,7 +620,7 @@ interface StockbitStatus {
   expires_at?: string | null;
 }
 
-const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast }) => {
+const StockbitSessionCard: React.FC<{ toast: (msg: string) => void; openTerminal: () => void }> = ({ toast, openTerminal }) => {
   const [status, setStatus] = useState<StockbitStatus | null>(null);
   const [paste, setPaste]   = useState('');
   const [note, setNote]     = useState('');
@@ -642,16 +642,36 @@ const StockbitSessionCard: React.FC<{ toast: (msg: string) => void }> = ({ toast
       return;
     }
     setBusy(true);
+    let saved = false;
     try {
       const r = await adminApi.saveStockbitToken(cleaned, note || undefined);
+      saved = true;
       const exp = r.expires_at ? ` · expires ${fmtTs(r.expires_at)}` : '';
-      toast(`Saved Stockbit token${exp}`);
+      toast(`Saved Stockbit token${exp} — kicking off backfill…`);
       setPaste('');
       setNote('');
-      load();
+      await load();
     } catch (e: any) {
-      toast(`Failed: ${e?.response?.data?.detail || e.message}`);
-    } finally { setBusy(false); }
+      const msg = e?.response?.data?.detail || e?.response?.statusText || e?.message || 'unknown error';
+      console.error('Stockbit save failed:', e);
+      toast(`Failed to save: ${msg}`);
+    }
+    if (saved) {
+      // Auto-fire the two backfills the user wants right after the token is set:
+      //   1. YTD weekly broker summary (Jan 1 → last settled Friday) — populates Three Doors / signals (~24 calls)
+      //   2. 5-month broker history (weeks=20 → 5 monthly windows) — populates inventory chart history (~120 calls)
+      try {
+        await adminApi.triggerSync('broker-summary');
+        await adminApi.triggerBrokerHistory(20);
+        toast('Backfill running: YTD weekly + 5-month history. Watch progress in the live log.');
+        openTerminal();
+      } catch (e: any) {
+        const msg = e?.response?.data?.detail || e?.message || 'unknown error';
+        console.error('Auto-backfill trigger failed:', e);
+        toast(`Token saved but backfill failed to start: ${msg}`);
+      }
+    }
+    setBusy(false);
   };
 
   const clear = async () => {

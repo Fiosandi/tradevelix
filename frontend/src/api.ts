@@ -94,6 +94,9 @@ export const adminApi = {
   triggerPriceHistory: (days: number) =>
     http.post(`/admin/sync/price-history?days=${days}`).then(r => r.data),
 
+  triggerBrokerHistory: (weeks: number) =>
+    http.post(`/admin/sync/broker-history?weeks=${weeks}`).then(r => r.data),
+
   uploadKseiPdf: (
     file: File,
     snapshotMonth: string,
