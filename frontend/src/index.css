@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────
+   SEMANTIC TOKENS  (carried over verbatim from v1 — proven palette)
+   Dark = default. Light kicks in via [data-theme="light"] (set by useTheme).
+   ────────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #0a0f1e;
+  --surface:   #0e1628;
+  --card:      #121f33;
+  --card-hi:   #172540;
+  --border:    #1e2f46;
+  --border-hi: #2a4060;
+
+  --text:      #e2ecf8;
+  --sub:       #5a7898;
+  --muted:     #2a4060;
+
+  --buy:       #10d98b;
+  --buy-dim:   rgba(16,217,139,.10);
+  --sell:      #ff3d5c;
+  --sell-dim:  rgba(255,61,92,.10);
+  --watch:     #ff9500;
+  --watch-dim: rgba(255,149,0,.10);
+  --wait:      #4a6070;
+  --wait-dim:  rgba(74,96,112,.08);
+  --whale:     #a070f0;
+  --whale-dim: rgba(160,112,240,.10);
+  --floor:     #38b8f8;
+  --floor-dim: rgba(56,184,248,.10);
+}
+
+[data-theme="light"] {
+  --bg:        #f0f4f9;
+  --surface:   #ffffff;
+  --card:      #ffffff;
+  --card-hi:   #f4f7fc;
+  --border:    #dce6f0;
+  --border-hi: #a8c0d8;
+
+  --text:      #0d1f33;
+  --sub:       #4a6a86;
+  --muted:     #94afc8;
+
+  --buy:       #00a86b;
+  --buy-dim:   rgba(0,168,107,.08);
+  --sell:      #e0002e;
+  --sell-dim:  rgba(224,0,46,.08);
+  --watch:     #d07000;
+  --watch-dim: rgba(208,112,0,.08);
+  --wait:      #6080a0;
+  --wait-dim:  rgba(96,128,160,.06);
+  --whale:     #7030d0;
+  --whale-dim: rgba(112,48,208,.08);
+  --floor:     #1860c8;
+  --floor-dim: rgba(24,96,200,.08);
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   @theme — exposes the tokens to Tailwind v4 as utility classes:
+     bg-bg, bg-surface, bg-card, text-text, text-sub, border-border,
+     text-buy / bg-buy / bg-buy-dim, text-sell / bg-sell-dim, etc.
+   ────────────────────────────────────────────────────────────────────── */
+@theme {
+  --color-bg:        var(--bg);
+  --color-surface:   var(--surface);
+  --color-card:      var(--card);
+  --color-card-hi:   var(--card-hi);
+  --color-border:    var(--border);
+  --color-border-hi: var(--border-hi);
+  --color-text:      var(--text);
+  --color-sub:       var(--sub);
+  --color-muted:     var(--muted);
+
+  --color-buy:       var(--buy);
+  --color-buy-dim:   var(--buy-dim);
+  --color-sell:      var(--sell);
+  --color-sell-dim:  var(--sell-dim);
+  --color-watch:     var(--watch);
+  --color-watch-dim: var(--watch-dim);
+  --color-wait:      var(--wait);
+  --color-wait-dim:  var(--wait-dim);
+  --color-whale:     var(--whale);
+  --color-whale-dim: var(--whale-dim);
+  --color-floor:     var(--floor);
+  --color-floor-dim: var(--floor-dim);
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", Consolas, monospace;
+}
+
+/* Base */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Smooth theme transition */
+*, *::before, *::after {
+  transition: background-color .18s ease, border-color .18s ease, color .12s ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+/* Typography helpers */
+.tabular { font-variant-numeric: tabular-nums; }

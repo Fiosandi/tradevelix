@@ -1,11 +1,15 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const ProtectedRoute: React.FC<{
+  children: React.ReactNode;
+  adminOnly?: boolean;
+}> = ({ children, adminOnly }) => {
   const { user } = useAuth();
-  if (!user) return <Navigate to="/login" replace />;
+  const loc = useLocation();
+
+  if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
+  if (adminOnly && !user.is_admin) return <Navigate to="/" replace />;
   return <>{children}</>;
 };
-
-export default ProtectedRoute;
